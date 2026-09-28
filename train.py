@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier
+from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -123,8 +123,8 @@ def report_validation(X: pd.DataFrame, train: pd.DataFrame) -> None:
     valid_dates = dates[-3:]
     valid = train.window_start_ts.isin(valid_dates).to_numpy()
     cols = [c for c in X.columns if c != "cookie_id"]
-    baseline = ExtraTreesClassifier(
-        n_estimators=400, min_samples_leaf=3, max_features=1.0,
+    baseline = RandomForestClassifier(
+        n_estimators=500, min_samples_leaf=3,
         class_weight="balanced", n_jobs=-1, random_state=SEED,
     )
     # A deliberately small baseline: only activity volume and unique adverts.
