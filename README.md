@@ -24,8 +24,10 @@ and temporal activity features (first and last event, active duration and
 inter-event gaps).  Counts of consecutive event types describe short navigation
 patterns.
 
-The final score blends Extra Trees (70%) and class-balanced histogram gradient
-boosting (30%).
+For an additional compact signal, User-Agent is target-encoded with smoothing:
+training rows receive only out-of-fold encodings, while validation and test rows
+use mappings fitted on the respective earlier training rows. The final score is
+an equal blend of Extra Trees and class-balanced histogram gradient boosting.
 Both are classical local scikit-learn models; there are no external services or
 language models.  The blend was chosen to combine rule-like behavioural splits
 with smoother score ranking.
@@ -39,7 +41,7 @@ prints the official `Precision @ Recall >= 0.70`, PR-AUC and ROC-AUC for that
 split using the supplied `metric.py` implementation. On the fixed development
 split, a Random Forest baseline on the engineered feature table obtains
 **0.6154** P@R≥0.70 and the final blend
-obtains **0.7179**.  The exact figures are diagnostics rather than estimates of
+obtains **0.7619**.  The exact figures are diagnostics rather than estimates of
 the hidden-test score. The final model extends the baseline with event
 composition, timing, navigation, UA and interaction features.
 
