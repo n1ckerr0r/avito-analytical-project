@@ -92,6 +92,20 @@ def make_features(meta: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     f["gap_coefficient_variation"] = f.gap_std_s / f.gap_mean_s
     f["event_hour"] = f.first_event_offset_s // 3600
 
+    # Repetition is informative independently from total volume: automated
+    # sessions commonly repeat the same action, item or query many times.
+    for column, prefix in [("event_name", "event"), ("item_id", "item"),
+                           ("search_query", "query"), ("item_category", "category")]:
+        counts = ev.groupby(["cookie_id", column], dropna=False).size()
+        per_cookie = counts.groupby(level=0)
+        f[f"{prefix}_top_share"] = per_cookie.max() / per_cookie.sum()
+        probabilities = counts / per_cookie.transform("sum")
+        f[f"{prefix}_entropy"] = (-probabilities * np.log(probabilities)).groupby(level=0).sum()
+
+    ev["event_hour_of_day"] = ev.event_ts.dt.hour
+    f["active_hour_nunique"] = ev.groupby("cookie_id").event_hour_of_day.nunique()
+    f["night_event_share"] = ev.assign(is_night=ev.event_hour_of_day.isin([0, 1, 2, 3, 4, 5]).astype(int)).groupby("cookie_id").is_night.mean()
+
     # Event types and compact categorical dimensions are one-hot count features.
     for column, prefix in [("event_name", "event"), ("platform", "platform"),
                            ("seller_type", "seller"), ("item_category", "category"),
@@ -104,9 +118,21 @@ def make_features(meta: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     pairs["pair"] = pairs.event_name.astype(str) + "__to__" + pairs.next_event.astype(str)
     f = _add_count_table(f, pairs.rename(columns={"pair": "transition"}), "transition", "transition")
 
+    # Proportions make event composition available directly to the tree models;
+    # learning a ratio from two independent count columns is unnecessarily hard.
+    share_features: dict[str, pd.Series] = {}
+    for prefix in ("event_", "platform_", "seller_", "category_", "transition_"):
+        count_columns = [c for c in f.columns if c.startswith(prefix) and c.endswith("_n")]
+        for col in count_columns:
+            share_features[col.replace("_n", "_share")] = f[col] / f.n_events
+    f = pd.concat([f, pd.DataFrame(share_features, index=f.index)], axis=1)
+
     ua = ev.user_agent.fillna("").str.lower()
-    for token in ["bot", "headless", "selenium", "webdriver", "curl", "python", "googlebot", "iphone", "android"]:
-        f[f"ua_has_{token}"] = ev.assign(flag=ua.str.contains(token, regex=False).astype(int)).groupby("cookie_id").flag.max()
+    ua_flags = {
+        f"ua_has_{token}": ev.assign(flag=ua.str.contains(token, regex=False).astype(int)).groupby("cookie_id").flag.max()
+        for token in ["bot", "headless", "selenium", "webdriver", "curl", "python", "googlebot", "iphone", "android"]
+    }
+    f = pd.concat([f, pd.DataFrame(ua_flags, index=f.index)], axis=1)
     query = ev.search_query.fillna("")
     query_stats = ev.assign(
         query_length=query.str.len(), query_digit_rate=query.str.count(r"\d") / query.str.len().replace(0, np.nan)
