@@ -16,7 +16,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
-from sklearn.impute import SimpleImputer
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from metric import precision_at_recall
@@ -67,6 +66,7 @@ def make_features(meta: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
         category_nunique=("item_category", "nunique"), location_nunique=("item_location", "nunique"),
         query_nunique=("search_query", "nunique"), ua_nunique=("user_agent", "nunique"),
         platform_nunique=("platform", "nunique"), seller_type_nunique=("seller_type", "nunique"),
+        pointer_x_nunique=("pointer_x", "nunique"), pointer_y_nunique=("pointer_y", "nunique"),
         item_missing_rate=("item_id", lambda s: s.isna().mean()),
         query_missing_rate=("search_query", lambda s: s.isna().mean()),
         pointer_present_rate=("pointer_x", lambda s: s.notna().mean()),
@@ -81,16 +81,21 @@ def make_features(meta: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
         first_event_offset_s=("offset_s", "min"), last_event_offset_s=("offset_s", "max"),
         active_span_s=("offset_s", lambda s: s.max() - s.min()),
         gap_mean_s=("gap_s", "mean"), gap_median_s=("gap_s", "median"), gap_min_s=("gap_s", "min"),
-        gap_std_s=("gap_s", "std"),
+        gap_std_s=("gap_s", "std"), gap_q10_s=("gap_s", lambda s: s.quantile(0.1)),
+        gap_q90_s=("gap_s", lambda s: s.quantile(0.9)),
     )
     f = f.join(temporal, how="left")
     f["events_per_active_hour"] = f.n_events / (1 + f.active_span_s / 3600)
     f["items_per_event"] = f.item_nunique / f.n_events
     f["queries_per_event"] = f.query_nunique / f.n_events
+    f["pointer_x_per_present_event"] = f.pointer_x_nunique / (f.n_events * f.pointer_present_rate)
+    f["gap_coefficient_variation"] = f.gap_std_s / f.gap_mean_s
+    f["event_hour"] = f.first_event_offset_s // 3600
 
     # Event types and compact categorical dimensions are one-hot count features.
     for column, prefix in [("event_name", "event"), ("platform", "platform"),
-                           ("seller_type", "seller"), ("item_category", "category")]:
+                           ("seller_type", "seller"), ("item_category", "category"),
+                           ("item_location", "location"), ("user_agent", "ua")]:
         f = _add_count_table(f, ev, column, prefix)
 
     # Consecutive event pairs preserve a lightweight representation of navigation.
