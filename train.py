@@ -17,13 +17,11 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import average_precision_score, roc_auc_score
-from sklearn.model_selection import StratifiedKFold
 
 from metric import precision_at_recall
 
 SEED = 2026
 DATA = Path("data")
-TARGET_ENCODING_SMOOTHING = 20.0
 
 
 def _safe(value: object) -> str:
@@ -124,51 +122,7 @@ def make_features(meta: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     return f
 
 
-def add_ua_target_encoding(
-    X_fit: pd.DataFrame, y_fit: pd.Series, meta_fit: pd.DataFrame,
-    X_apply: pd.DataFrame, meta_apply: pd.DataFrame, events: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Add leakage-safe smoothed target encoding for the normalized User-Agent.
-
-    Rows used to train a model receive out-of-fold encodings, so no cookie sees
-    its own target.  Rows being scored use a mapping fitted only on X_fit.  The
-    same function therefore supports both the temporal validation and test set.
-    """
-    meta = pd.concat([meta_fit, meta_apply], ignore_index=True)
-    ev = events.merge(meta[["cookie_id", "window_start_ts", "window_end_ts"]], on="cookie_id", how="inner")
-    ev = ev[(ev.event_ts >= ev.window_start_ts) & (ev.event_ts < ev.window_end_ts)]
-    pairs = ev[["cookie_id", "user_agent"]].copy()
-    pairs["ua"] = pairs.user_agent.fillna("__missing__").map(_safe)
-    pairs = pairs[["cookie_id", "ua"]].drop_duplicates()
-    y_by_cookie = pd.Series(y_fit.to_numpy(), index=meta_fit.cookie_id)
-    prior = float(y_fit.mean())
-
-    def encode(fit_cookies: pd.Index, apply_cookies: pd.Index) -> pd.DataFrame:
-        observed = pairs[pairs.cookie_id.isin(fit_cookies)].copy()
-        observed["target"] = observed.cookie_id.map(y_by_cookie)
-        stats = observed.groupby("ua").target.agg(["sum", "count"])
-        stats["score"] = (stats["sum"] + TARGET_ENCODING_SMOOTHING * prior) / (stats["count"] + TARGET_ENCODING_SMOOTHING)
-        scored = pairs[pairs.cookie_id.isin(apply_cookies)].merge(stats[["score"]], left_on="ua", right_index=True, how="left")
-        scored["score"] = scored.score.fillna(prior)
-        return scored.groupby("cookie_id").score.agg(["mean", "max", "min"])
-
-    oof = pd.DataFrame(index=meta_fit.cookie_id, columns=["mean", "max", "min"], dtype=float)
-    splitter = StratifiedKFold(n_splits=5, shuffle=True, random_state=SEED)
-    fit_ids = meta_fit.cookie_id.reset_index(drop=True)
-    for train_idx, valid_idx in splitter.split(fit_ids, y_fit):
-        encoded = encode(fit_ids.iloc[train_idx], fit_ids.iloc[valid_idx])
-        oof.loc[fit_ids.iloc[valid_idx], encoded.columns] = encoded.reindex(fit_ids.iloc[valid_idx]).to_numpy()
-    scored_apply = encode(meta_fit.cookie_id, meta_apply.cookie_id)
-
-    def attach(X: pd.DataFrame, encoded: pd.DataFrame) -> pd.DataFrame:
-        values = encoded.reindex(X.cookie_id).fillna(prior).reset_index(drop=True)
-        values.columns = [f"ua_target_encoding_{c}" for c in values.columns]
-        return pd.concat([X.reset_index(drop=True), values.astype("float32")], axis=1)
-
-    return attach(X_fit, oof), attach(X_apply, scored_apply)
-
-
-def report_validation(X: pd.DataFrame, train: pd.DataFrame, events: pd.DataFrame) -> None:
+def report_validation(X: pd.DataFrame, train: pd.DataFrame) -> None:
     """Time-based diagnostic: last three labeled days are never used for fitting."""
     dates = sorted(train.window_start_ts.unique())
     valid_dates = dates[-3:]
@@ -181,33 +135,24 @@ def report_validation(X: pd.DataFrame, train: pd.DataFrame, events: pd.DataFrame
     # Baseline: one model family on the complete engineered feature table.
     baseline.fit(X.loc[~valid, cols], train.loc[~valid, "target"])
     baseline_pred = baseline.predict_proba(X.loc[valid, cols])[:, 1]
-    X_fit, X_valid = add_ua_target_encoding(
-        X.loc[~valid], train.loc[~valid, "target"], train.loc[~valid],
-        X.loc[valid], train.loc[valid], events,
-    )
-    encoded_cols = [c for c in X_fit.columns if c != "cookie_id"]
     extra = ExtraTreesClassifier(
         n_estimators=700, min_samples_leaf=1, max_features=0.8,
         class_weight="balanced", n_jobs=-1, random_state=SEED,
-    ).fit(X_fit[encoded_cols], train.loc[~valid, "target"])
+    ).fit(X.loc[~valid, cols], train.loc[~valid, "target"])
     hgb = HistGradientBoostingClassifier(
         learning_rate=0.06, max_iter=350, max_leaf_nodes=20, l2_regularization=2.0,
         random_state=SEED,
-    ).fit(X_fit[encoded_cols], train.loc[~valid, "target"],
+    ).fit(X.loc[~valid, cols], train.loc[~valid, "target"],
           sample_weight=np.where(train.loc[~valid, "target"].to_numpy() == 1, 6.0, 1.0))
-    extra_pred = extra.predict_proba(X_valid[encoded_cols])[:, 1]
-    hgb_pred = hgb.predict_proba(X_valid[encoded_cols])[:, 1]
-    pred = 0.5 * extra_pred + 0.5 * hgb_pred
+    extra_pred = extra.predict_proba(X.loc[valid, cols])[:, 1]
+    hgb_pred = hgb.predict_proba(X.loc[valid, cols])[:, 1]
+    pred = hgb_pred
     y = train.loc[valid, "target"]
     print("Validation (last 3 days):")
     print(f"  Baseline P@R>=0.70: {precision_at_recall(y, baseline_pred):.4f}")
     print(f"  P@R>=0.70: {precision_at_recall(y, pred):.4f}")
     print(f"  PR-AUC:     {average_precision_score(y, pred):.4f}")
     print(f"  ROC-AUC:    {roc_auc_score(y, pred):.4f}")
-    print("  Blend weights (Extra Trees):", ", ".join(
-        f"{weight:.1f}={precision_at_recall(y, weight * extra_pred + (1 - weight) * hgb_pred):.4f}"
-        for weight in (0.5, 0.6, 0.7, 0.8, 0.9)
-    ))
 
 
 def main() -> None:
@@ -217,14 +162,11 @@ def main() -> None:
     all_features = make_features(pd.concat([train.drop(columns="target"), test], ignore_index=True), events)
     X_train = all_features.iloc[:len(train)].reset_index(drop=True)
     X_test = all_features.iloc[len(train):].reset_index(drop=True)
-    report_validation(X_train, train, events)
-
-    X_train, X_test = add_ua_target_encoding(X_train, train.target, train, X_test, test, events)
+    report_validation(X_train, train)
 
     cols = [c for c in X_train.columns if c != "cookie_id"]
-    # Extra Trees captures threshold/interaction rules; HGB adds a smoother,
-    # complementary ranking.  Blending only ranks probabilities, the submission
-    # itself remains a calibrated score in [0, 1].
+    # Extra Trees is kept as a validation comparator. The final model is the
+    # more regularized HGB ranker, selected by the temporal P@R>=0.70 result.
     extra = ExtraTreesClassifier(
         n_estimators=1000, min_samples_leaf=1, max_features=0.8,
         class_weight="balanced", n_jobs=-1, random_state=SEED,
@@ -234,7 +176,7 @@ def main() -> None:
         random_state=SEED,
     ).fit(X_train[cols], train.target,
           sample_weight=np.where(train.target.to_numpy() == 1, 6.0, 1.0))
-    score = 0.5 * extra.predict_proba(X_test[cols])[:, 1] + 0.5 * hgb.predict_proba(X_test[cols])[:, 1]
+    score = hgb.predict_proba(X_test[cols])[:, 1]
     submission = pd.DataFrame({"cookie_id": test.cookie_id, "score": np.clip(score, 0, 1)})
     assert submission.cookie_id.is_unique and len(submission) == len(test)
     assert submission.score.notna().all() and submission.score.between(0, 1).all()
