@@ -21,9 +21,8 @@ counts, unique ads/categories/locations/queries, item and query missingness,
 platform and seller-type counts, exact normalized User-Agent counts and flags,
 pointer presence, diversity and spread, search-page statistics, query length,
 and temporal activity features (first and last event, active duration and
-inter-event gaps).  Event/action shares, behavioural entropy and repetition
-ratios capture navigation composition; counts of consecutive event types
-describe short navigation patterns.
+inter-event gaps).  Counts of consecutive event types describe short navigation
+patterns.
 
 The final score blends Extra Trees (70%) and class-balanced histogram gradient
 boosting (30%).
@@ -39,8 +38,8 @@ on later unseen days and avoids randomly mixing neighbouring windows.  `train.py
 prints the official `Precision @ Recall >= 0.70`, PR-AUC and ROC-AUC for that
 split using the supplied `metric.py` implementation. On the fixed development
 split, a Random Forest baseline on the engineered feature table obtains
-**0.5672** P@R≥0.70 and the final blend
-obtains **0.7386**.  The exact figures are diagnostics rather than estimates of
+**0.6154** P@R≥0.70 and the final blend
+obtains **0.7179**.  The exact figures are diagnostics rather than estimates of
 the hidden-test score. The final model extends the baseline with event
 composition, timing, navigation, UA and interaction features.
 
