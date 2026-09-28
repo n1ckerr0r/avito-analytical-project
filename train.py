@@ -127,9 +127,9 @@ def report_validation(X: pd.DataFrame, train: pd.DataFrame) -> None:
         n_estimators=500, min_samples_leaf=3,
         class_weight="balanced", n_jobs=-1, random_state=SEED,
     )
-    # A deliberately small baseline: only activity volume and unique adverts.
-    baseline.fit(X.loc[~valid, ["n_events", "item_nunique"]], train.loc[~valid, "target"])
-    baseline_pred = baseline.predict_proba(X.loc[valid, ["n_events", "item_nunique"]])[:, 1]
+    # Baseline: one model family on the complete engineered feature table.
+    baseline.fit(X.loc[~valid, cols], train.loc[~valid, "target"])
+    baseline_pred = baseline.predict_proba(X.loc[valid, cols])[:, 1]
     extra = ExtraTreesClassifier(
         n_estimators=700, min_samples_leaf=1, max_features=0.8,
         class_weight="balanced", n_jobs=-1, random_state=SEED,

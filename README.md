@@ -36,7 +36,8 @@ out, while all earlier labeled days are used for fitting.  This mirrors scoring
 on later unseen days and avoids randomly mixing neighbouring windows.  `train.py`
 prints the official `Precision @ Recall >= 0.70`, PR-AUC and ROC-AUC for that
 split using the supplied `metric.py` implementation. On the fixed development
-split, the two-feature baseline obtains **0.6222** P@R≥0.70 and the final blend
+split, a Random Forest baseline on the engineered feature table obtains
+**0.6222** P@R≥0.70 and the final blend
 obtains **0.6871**.  The exact figures are diagnostics rather than estimates of
 the hidden-test score. The final model extends the baseline with event
 composition, timing, navigation, UA and interaction features.
